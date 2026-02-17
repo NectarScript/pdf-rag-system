@@ -1,0 +1,29 @@
+# Core backend
+fastapi==0.125.0
+uvicorn==0.41.0
+python-multipart==0.0.22
+python-dotenv==1.2.1
+
+# Haystack and vector DB
+farm-haystack[faiss]==1.26.4.post0
+faiss-cpu==1.13.2
+
+# AI / Embeddings / Transformers (COMPATIBLE VERSIONS)
+transformers==4.46.3
+sentence-transformers==2.7.0
+torch==2.2.2
+
+# Numeric compatibility (CRITICAL: must stay below 2.0)
+numpy==1.26.4
+scikit-learn==1.7.2
+scipy==1.15.3
+
+# OCR support
+pytesseract==0.3.13
+pdf2image==1.17.0
+pillow==12.1.1
+
+# Utilities
+requests==2.32.5
+tqdm==4.67.3
+pandas==2.3.3
