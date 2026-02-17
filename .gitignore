@@ -1,0 +1,10 @@
+venv/
+vector_store/
+__pycache__/
+*.pyc
+*.db
+*.sqlite
+.env
+.cache/
+*.safetensors
+*.bin
