@@ -1,104 +1,92 @@
-from app.retrieval.retriever import retriever
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
-import torch
-
-# =========================
-# Model setup
-# =========================
-
-model_name = "google/flan-t5-base"
-
-print("Loading FLAN-T5 model...")
-
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-model = AutoModelForSeq2SeqLM.from_pretrained(
-    model_name,
-    torch_dtype=torch.float32
+from app.retrieval.retriever import hybrid_retrieve
+from app.retrieval.chat_memory import (
+    get_session_history,
+    add_to_session
 )
 
-# Use GPU if available
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = model.to(device)
-
-print(f"Model loaded on: {device}")
+from groq import Groq
+import os
 
 
-# =========================
-# Question answering function
-# =========================
+# ==============================
+# Initialize Groq Client
+# ==============================
 
-def ask_question(query: str):
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-    # Retrieve more documents for better context
-    docs = retriever.retrieve(query, top_k=8)
 
-    if not docs:
-        return "No relevant information found in the document."
+# ==============================
+# Streaming RAG Answer (Groq)
+# ==============================
 
-    # Limit context size safely
-    context_parts = []
-    total_length = 0
-    max_context_length = 1500
+def stream_answer(query: str, session_id: str, file_name: str = None):
 
-    for doc in docs:
-        text = doc.content.strip()
-        if total_length + len(text) > max_context_length:
-            break
-        context_parts.append(text)
-        total_length += len(text)
+    try:
+        filters = {"file_name": [file_name]} if file_name else None
 
-    context = "\n\n".join(context_parts)
+        # Retrieve relevant documents
+        docs = hybrid_retrieve(
+            query=query,
+            top_k=4,  # reduce for token safety
+            filters=filters
+        )
 
-    # Strong prompt for detailed answers
-    prompt = f"""
-You are an intelligent AI assistant.
+        context = "\n\n".join([doc.content for doc in docs])
 
-Use ONLY the provided context to answer the question.
+        history = get_session_history(session_id)
 
-Provide a detailed, structured, and complete answer.
+        # Build messages list for chat model
+        messages = [
+            {
+                "role": "system",
+                "content": """You are a highly accurate AI assistant.
 
-If possible, explain clearly in multiple sentences.
+Strict Rules:
+1. Answer ONLY using the provided context.
+2. If the answer is not found in the context, say:
+   "Information not found in provided documents."
+3. Do NOT hallucinate.
+4. Be clear and well structured.
+"""
+            }
+        ]
 
-Context:
+        # Add previous chat history
+        for item in history:
+            messages.append({"role": "user", "content": item["question"]})
+            messages.append({"role": "assistant", "content": item["answer"]})
+
+        # Add current query with context
+        user_prompt = f"""
+--- CONTEXT ---
 {context}
+--- END CONTEXT ---
 
 Question:
 {query}
-
-Detailed Answer:
 """
 
-    # Tokenize
-    inputs = tokenizer(
-        prompt,
-        return_tensors="pt",
-        truncation=True,
-        max_length=512
-    ).to(device)
+        messages.append({"role": "user", "content": user_prompt})
 
-    # Generate detailed output
-    outputs = model.generate(
-        inputs["input_ids"],
+        # Call Groq streaming API
+        stream = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=messages,
+            temperature=0.2,
+            max_tokens=1024,
+            stream=True
+        )
 
-        max_length=512,          # increased output length
-        min_length=150,           # ensure detailed answer
+        full_answer = ""
 
-        num_beams=4,             # better reasoning
-        early_stopping=True,
+        for chunk in stream:
+            content = chunk.choices[0].delta.content
+            if content:
+                full_answer += content
+                yield content
 
-        temperature=0.7,
-        top_p=0.9,         # more factual
-        do_sample=True,
+        # Save to session memory
+        add_to_session(session_id, query, full_answer)
 
-        repetition_penalty=1.2,  # avoid repetition
-
-        no_repeat_ngram_size=3
-    )
-
-    answer = tokenizer.decode(
-        outputs[0],
-        skip_special_tokens=True
-    )
-
-    return answer
+    except Exception as e:
+        yield f"\n\n[ERROR]: {str(e)}"

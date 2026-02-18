@@ -1,0 +1,1 @@
+components/client-app.tsx(5,30): error TS2307: Cannot find module 'uuid' or its corresponding type declarations.
